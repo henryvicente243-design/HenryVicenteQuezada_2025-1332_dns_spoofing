@@ -161,7 +161,7 @@ SW1# show ip dhcp snooping binding
 
 ### Topología
 
-![topologia](PEGA_IMAGEN_AQUI)
+<img width="896" height="720" alt="image" src="https://github.com/user-attachments/assets/14f9603b-e415-4304-b482-96c21c4c75e9" />
 
 ### Tabla de Direccionamiento
 
