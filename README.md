@@ -138,7 +138,7 @@ ADVERTENCIA: Solo para uso en entornos controlados y con
 autorización explícita. Laboratorio académico ITLA.
 
 Topología:
-  Víctima  : 10.13.32.10   (Windows VPC)
+  Víctima  : 10.13.32.10  (Windows VPC)
   Atacante : 10.13.32.5   (Kali)
   IP Falsa : 10.13.32.50  (servidor web falso, alias en Kali)
   Gateway  : 10.13.32.1   (R1 - VLAN 10)
@@ -158,7 +158,7 @@ from scapy.all import (
 
 # ─── Configuración de red ─────────────────────────────────
 IFACE        = "eth0"
-VICTIMA_IP   = "10.13.32.10"     # <-- AJUSTAR a la IP real del Windows
+VICTIMA_IP   = "10.13.32.10"
 ROUTER_IP    = "10.13.32.1"
 SERVIDOR_IP  = "10.13.32.50"    # IP falsa servida por Kali
 DOMINIO_FAKE = "itla.edu.do"
